@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>04 侧滑详情模板 · FasTreat Admin</title>
+    <link
+      rel="stylesheet"
+      href="../node_modules/element-plus/dist/index.css"
+      onerror="this.onerror=null;this.href='https://unpkg.com/element-plus@2.9.7/dist/index.css'"
+    />
+    <link rel="stylesheet" href="assets/template.css" />
+    <style>
+      .drawer-head-main {
+        display: flex;
+        flex-direction: column;
+      }
+      .drawer-head-title {
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .drawer-head-sub {
+        font-size: 12px;
+        color: var(--tpl-text-placeholder);
+        margin-top: 2px;
+      }
+      .drawer-actions {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .drawer-body {
+        min-height: 320px;
+      }
+      .drawer-section {
+        border-bottom: 1px solid var(--tpl-divider);
+      }
+      .drawer-section:last-child {
+        border-bottom: 0;
+      }
+      .note-title {
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .note-meta {
+        font-size: 12px;
+        color: var(--tpl-text-placeholder);
+        margin-top: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      ============================================================================
+      模板 04：侧滑详情页（el-drawer）
+      ============================================================================
+      对应项目实现：
+        src/views/system/patient/detail/**        患者详情（抽屉 / 独立页两种形态）
+        全局类名 .detail_drawer / .detail_drawer_header  项目详情抽屉惯例
+
+      要点：
+        - 详情抽屉宽度 600~760px，标题区用弹窗头部槽自定义，右侧放主要操作；
+        - 内容按业务分组（基本信息 / 就诊记录 / 备注），每组前加小标题；
+        - 底部操作条固定（.drawer-footer），列表长时不需要滚到底才能操作；
+        - 打开时按 id 拉取详情，不要在列表接口里返回全量详情字段。
+      ============================================================================
+    -->
+    <div id="app" v-cloak>
+      <div class="app-container">
+        <div class="page-header">
+          <div>
+            <h2>Patient Detail</h2>
+            <div class="page-desc">
+              侧滑详情模板：点击列表行或「Detail」，右侧滑出详情抽屉。
+            </div>
+          </div>
+        </div>
+
+        <div class="tpl-notes" v-if="!embed">
+          <div class="tpl-notes-title">使用说明</div>
+          <ul>
+            <li><code>el-drawer</code> 建议 <code>direction="rtl"</code>，宽度 600~760px</li>
+            <li>标题区使用 <code>#header</code> 自定义：姓名 + 状态 + 操作按钮</li>
+            <li>字段展示统一用 <code>el-descriptions</code>，label 颜色 #999，内容 500 字重</li>
+            <li>底部操作条用 <code>.drawer-footer</code>，编辑跳转用 <code>router.push</code></li>
+          </ul>
+        </div>
+
+        <div class="table-card">
+          <el-table :data="list" row-key="patientId" @row-click="openDetail" highlight-current-row>
+            <el-table-column prop="patientNo" label="Patient No" width="150"></el-table-column>
+            <el-table-column prop="name" label="Patient" min-width="180"></el-table-column>
+            <el-table-column prop="clinician" label="Clinician" width="160"></el-table-column>
+            <el-table-column prop="caseType" label="Case type" min-width="170"></el-table-column>
+            <el-table-column label="Status" width="120">
+              <template #default="scope">
+                <el-tag :type="scope.row.statusTag" effect="light">
+                  {{ scope.row.statusLabel }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="Last visit" width="170">
+              <template #default="scope">{{ format(scope.row.lastVisit) }}</template>
+            </el-table-column>
+            <el-table-column label="Operation" width="110" fixed="right">
+              <template #default="scope">
+                <el-button link type="primary" @click.stop="openDetail(scope.row)">
+                  Detail
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- ==================== 侧滑详情 ==================== -->
+        <el-drawer
+          v-model="open"
+          class="detail_drawer"
+          size="640px"
+          direction="rtl"
+          :with-header="true"
+          :destroy-on-close="true"
+          :close-on-click-modal="true"
+        >
+          <template #header>
+            <div class="drawer-head-main">
+              <div class="drawer-head-title">Patient detail</div>
+              <div class="drawer-head-sub">
+                {{ current.patientNo || '-' }} · 数据来源：GET /system/patient/&#123;patientId&#125;
+              </div>
+            </div>
+            <div class="drawer-actions">
+              <el-button plain size="small" @click="reload">
+                <ft-icon name="Refresh" class="mr8"></ft-icon>
+                <span>Refresh</span>
+              </el-button>
+            </div>
+          </template>
+
+          <div v-loading="loading" class="drawer-body">
+            <!-- 头部概览 -->
+            <div class="detail-hero">
+              <div class="hero-avatar">{{ current.initials || '--' }}</div>
+              <div>
+                <div class="hero-name">
+                  <span>{{ current.name || '-' }}</span>
+                  <el-tag v-if="current.status" :type="current.statusTag" effect="light">
+                    {{ current.statusLabel }}
+                  </el-tag>
+                  <el-tag v-if="current.isVip" type="warning" effect="plain">VIP</el-tag>
+                </div>
+                <div class="hero-sub">
+                  {{ current.gender || '-' }} · {{ current.age || '-' }} years ·
+                  {{ current.province || '-' }}
+                </div>
+              </div>
+            </div>
+
+            <el-tabs v-model="activeTab" type="card">
+              <el-tab-pane label="Overview" name="overview">
+                <div class="drawer-section">
+                  <div class="drawer-section-title">Basic information</div>
+                  <el-descriptions :column="2" size="default">
+                    <el-descriptions-item label="Patient No">
+                      {{ current.patientNo || '-' }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Case type">
+                      {{ current.caseType || '-' }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Email">
+                      {{ current.email || '-' }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Phone">
+                      {{ current.phone || '-' }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Clinician">
+                      {{ current.clinician || '-' }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Channel">
+                      {{ current.channel || '-' }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Visit count">
+                      {{ current.visitCount || 0 }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Last visit">
+                      {{ format(current.lastVisit) }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Remark" :span="2">
+                      {{ current.remark || 'No remark' }}
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane label="Appointments" name="appointments">
+                <div class="drawer-section">
+                  <div class="drawer-section-title">Visit history</div>
+                  <el-table :data="appointments" size="small" row-key="id">
+                    <el-table-column prop="appointmentNo" label="No" width="90"></el-table-column>
+                    <el-table-column label="Time" width="150">
+                      <template #default="scope">{{ format(scope.row.startTime) }}</template>
+                    </el-table-column>
+                    <el-table-column prop="clinicianName" label="Clinician" min-width="130"></el-table-column>
+                    <el-table-column label="Status" width="100">
+                      <template #default="scope">
+                        <el-tag size="small" :type="Tpl.statusTag(scope.row.status)" effect="light">
+                          {{ Tpl.statusLabel(scope.row.status) }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane label="Notes" name="notes">
+                <div class="drawer-section">
+                  <div class="drawer-section-title">Case notes</div>
+                  <el-timeline>
+                    <el-timeline-item
+                      v-for="(note, index) in notes"
+                      :key="index"
+                      :timestamp="note.time"
+                      placement="top"
+                    >
+                      <div class="note-title">{{ note.title }}</div>
+                      <div class="text-secondary">{{ note.content }}</div>
+                      <div class="note-meta">by {{ note.author }}</div>
+                    </el-timeline-item>
+                  </el-timeline>
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane label="Audit log" name="audit">
+                <div class="drawer-section">
+                  <div class="drawer-section-title">Operation log</div>
+                  <el-table :data="auditLogs" size="small">
+                    <el-table-column prop="time" label="Time" width="160"></el-table-column>
+                    <el-table-column prop="operator" label="Operator" width="130"></el-table-column>
+                    <el-table-column prop="action" label="Action" min-width="150"></el-table-column>
+                    <el-table-column prop="result" label="Result" width="100">
+                      <template #default="scope">
+                        <el-tag
+                          size="small"
+                          :type="scope.row.result === 'Success' ? 'success' : 'danger'"
+                          effect="light"
+                        >{{ scope.row.result }}</el-tag>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </el-tab-pane>
+            </el-tabs>
+
+            <!-- 底部操作条 -->
+            <div class="drawer-footer">
+              <el-button plain @click="open = false">Close</el-button>
+              <el-button plain @click="handlePrint">Print</el-button>
+              <el-button type="primary" @click="handleEdit">Edit patient</el-button>
+            </div>
+          </div>
+        </el-drawer>
+      </div>
+    </div>
+
+    <div id="tpl-boot-loading" style="padding: 40px; color: #999">Loading template…</div>
+
+    <script>
+      window.__TPL_PAGE__ = {
+        name: 'DrawerDetailPage',
+        data: function () {
+          return {
+            embed: Tpl.isEmbed(),
+            Tpl: Tpl,
+            list: Tpl.mock.patients(12),
+            open: false,
+            loading: false,
+            activeTab: 'overview',
+            current: {},
+            appointments: [],
+            notes: [
+              {
+                time: '2026-09-20 10:12',
+                title: 'Initial assessment completed',
+                content: 'ADHD screening finished. Follow-up in 2 weeks for medication review.',
+                author: 'Dr. Alan Reed'
+              },
+              {
+                time: '2026-09-12 16:40',
+                title: 'Lab results received',
+                content: 'Blood panel within normal range. No further action required.',
+                author: 'Nurse Bella Chen'
+              },
+              {
+                time: '2026-09-02 09:05',
+                title: 'Patient registered',
+                content: 'Created from intake form, consent signed.',
+                author: 'System'
+              }
+            ],
+            auditLogs: [
+              {
+                time: '2026-09-28 11:20',
+                operator: 'admin@fastreat',
+                action: 'View patient detail',
+                result: 'Success'
+              },
+              {
+                time: '2026-09-27 15:02',
+                operator: 'Dr. Alan Reed',
+                action: 'Update case type',
+                result: 'Success'
+              },
+              {
+                time: '2026-09-26 08:31',
+                operator: 'support@fastreat',
+                action: 'Export patient list',
+                result: 'Failed'
+              }
+            ]
+          }
+        },
+        methods: {
+          format: function (value) {
+            return Tpl.formatTime(value, 'YYYY-MM-DD HH:mm')
+          },
+          /** 打开抽屉：真实项目在此调用 getPatientDetail(patientId) */
+          openDetail: function (row) {
+            var self = this
+            this.current = row
+            this.activeTab = 'overview'
+            this.appointments = Tpl.mock.appointments(4)
+            this.open = true
+            this.loading = true
+            window.setTimeout(function () {
+              self.loading = false
+            }, 300)
+          },
+          reload: function () {
+            var self = this
+            this.loading = true
+            window.setTimeout(function () {
+              self.loading = false
+              self.$message({ message: 'Detail refreshed', type: 'success' })
+            }, 300)
+          },
+          handleEdit: function () {
+            this.$message({ message: '跳转编辑页 / 打开编辑弹框（见 03 模板）', type: 'info' })
+          },
+          handlePrint: function () {
+            this.$message({ message: '打印：window.print() 或后端导出 PDF', type: 'info' })
+          }
+        }
+      }
+    </script>
+    <script src="assets/template.js"></script>
+  </body>
+</html>

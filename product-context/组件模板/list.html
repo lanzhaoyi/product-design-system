@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>02 标准列表模板 · FasTreat Admin</title>
+    <link
+      rel="stylesheet"
+      href="../node_modules/element-plus/dist/index.css"
+      onerror="this.onerror=null;this.href='https://unpkg.com/element-plus@2.9.7/dist/index.css'"
+    />
+    <link rel="stylesheet" href="assets/template.css" />
+    <style>
+      /* 页面级样式：只放本页特有、不进共享基座的东西 */
+      .cell-user {
+        display: flex;
+        align-items: center;
+      }
+      .cell-user .cell-avatar {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: var(--tpl-purple-light);
+        color: var(--tpl-purple);
+        font-size: 12px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 8px;
+        flex: none;
+      }
+      .cell-user .cell-name {
+        font-weight: 500;
+      }
+      .cell-user .cell-email {
+        font-size: 12px;
+        color: var(--tpl-text-placeholder);
+      }
+      .query-form .el-form-item {
+        margin-bottom: 16px;
+      }
+      .table-card .el-table {
+        --el-table-border-color: var(--tpl-divider);
+      }
+      .col-setting-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      ============================================================================
+      模板 02：标准列表页（搜索 + 筛选 + 表格 + 分页）
+      ============================================================================
+      对应项目实现：
+        src/views/system/dept/index.vue        搜索表单 + 工具栏 + 表格 + 分页
+        src/components/Pagination/index.vue    分页组件封装
+        src/components/ListPage/index.vue      FtSearch / FtTable 组合（可选）
+        src/components/RightToolbar/index.vue  搜索显隐 / 表格列显隐 / 导出
+        src/directive/permission/hasPermi.js   v-hasPermi 权限指令
+
+      落地到真实页面的步骤：
+        1. 复制 page-header + 搜索表单 + 工具栏 + el-table + 分页 的结构；
+        2. 把 mock 数据替换成 src/api/<domain> 里的 listXxx 接口，
+           分页参数沿用 pageNum / pageSize，返回结构沿用 rows / total；
+        3. 按钮上按需补 v-hasPermi="['system:xxx:add']" 等权限指令。
+      ============================================================================
+    -->
+    <div id="app" v-cloak>
+      <div class="app-container">
+        <!-- 页面标题 -->
+        <div class="page-header">
+          <div>
+            <h2>Patient List</h2>
+            <div class="page-desc">
+              标准列表模板：搜索区 / 工具栏 / 表格 / 分页，可直接作为业务列表页起点。
+            </div>
+          </div>
+          <div>
+            <el-button type="primary" plain @click="handleAdd">
+              <ft-icon name="Plus" class="mr8"></ft-icon>
+              <span>New Patient</span>
+            </el-button>
+          </div>
+        </div>
+
+        <!-- 模板说明：被框架页内嵌时自动隐藏 -->
+        <div class="tpl-notes" v-if="!embed">
+          <div class="tpl-notes-title">使用说明</div>
+          <ul>
+            <li>搜索表单用 <code>el-form :inline</code> + <code>v-show="showSearch"</code>，回车即查询</li>
+            <li>工具栏第一行放主操作，右侧放列显隐 / 刷新 / 搜索开关（对应 RightToolbar）</li>
+            <li>表格数据由 <code>pageNum / pageSize</code> 驱动，切换分页重新请求；此处为本地分页演示</li>
+            <li>操作列统一用 <code>link</code> 文字按钮，危险操作加 <code>link type="danger"</code></li>
+          </ul>
+        </div>
+        <el-alert
+          v-if="selectedIds.length"
+          class="selected-alert"
+          type="info"
+          :closable="false"
+          show-icon
+        >
+          <template #title>
+            Selected {{ selectedIds.length }} record(s)
+            <el-button link type="primary" @click="batchRemove">Batch delete</el-button>
+            <el-button link @click="clearSelection">Clear</el-button>
+          </template>
+        </el-alert>
+
+        <!-- 搜索区 -->
+        <el-form
+          v-show="showSearch"
+          class="query-form search-panel"
+          :model="queryParams"
+          :inline="true"
+          ref="queryRef"
+        >
+          <el-form-item label="Keyword" prop="keyword">
+            <el-input
+              v-model="queryParams.keyword"
+              placeholder="Name / Patient No / Email"
+              clearable
+              style="width: 220px"
+              @keyup.enter="handleQuery"
+            ></el-input>
+          </el-form-item>
+          <el-form-item label="Clinician" prop="clinicianId">
+            <el-select
+              v-model="queryParams.clinicianId"
+              placeholder="All clinicians"
+              clearable
+              filterable
+              style="width: 200px"
+            >
+              <el-option
+                v-for="item in clinicians"
+                :key="item.id"
+                :label="item.name"
+                :value="item.id"
+              ></el-option>
+            </el-select>
+          </el-form-item>
+          <el-form-item label="Case type" prop="caseType">
+            <el-select
+              v-model="queryParams.caseType"
+              placeholder="All case types"
+              clearable
+              style="width: 200px"
+            >
+              <el-option
+                v-for="item in caseTypes"
+                :key="item"
+                :label="item"
+                :value="item"
+              ></el-option>
+            </el-select>
+          </el-form-item>
+          <el-form-item label="Status" prop="status">
+            <el-select
+              v-model="queryParams.status"
+              placeholder="All status"
+              clearable
+              style="width: 160px"
+            >
+              <el-option
+                v-for="item in statusOptions"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              ></el-option>
+            </el-select>
+          </el-form-item>
+          <el-form-item label="Created">
+            <el-date-picker
+              v-model="queryParams.dateRange"
+              type="daterange"
+              value-format="YYYY-MM-DD"
+              range-separator="-"
+              start-placeholder="Start date"
+              end-placeholder="End date"
+              unlink-panels
+              style="width: 260px"
+            ></el-date-picker>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="handleQuery">
+              <ft-icon name="Search" class="mr8"></ft-icon>
+              <span>Search</span>
+            </el-button>
+            <el-button plain @click="resetQuery">
+              <ft-icon name="Refresh" class="mr8"></ft-icon>
+              <span>Reset</span>
+            </el-button>
+          </el-form-item>
+        </el-form>
+
+        <!-- 工具栏 -->
+        <div class="toolbar">
+          <el-button type="primary" @click="handleAdd">
+            <ft-icon name="Plus" class="mr8"></ft-icon>
+            <span>New</span>
+          </el-button>
+          <el-button plain :disabled="!selectedIds.length" @click="batchRemove">
+            <ft-icon name="Delete" class="mr8"></ft-icon>
+            <span>Delete</span>
+          </el-button>
+          <el-button plain @click="handleExport">
+            <ft-icon name="Download" class="mr8"></ft-icon>
+            <span>Export</span>
+          </el-button>
+
+          <div class="toolbar-right">
+            <el-tooltip content="Refresh" effect="dark">
+              <ft-icon class="toolbar-icon" name="Refresh" @click="getList"></ft-icon>
+            </el-tooltip>
+            <el-tooltip content="Column settings" effect="dark">
+              <el-popover placement="bottom-end" trigger="click" :width="200">
+                <template #reference>
+                  <ft-icon class="toolbar-icon" name="Operation"></ft-icon>
+                </template>
+                <div class="col-setting-list">
+                  <el-checkbox
+                    v-for="col in columns"
+                    :key="col.key"
+                    v-model="col.visible"
+                  >{{ col.label }}</el-checkbox>
+                </div>
+              </el-popover>
+            </el-tooltip>
+            <el-tooltip :content="showSearch ? 'Hide search' : 'Show search'" effect="dark">
+              <ft-icon
+                class="toolbar-icon"
+                :name="showSearch ? 'Hide' : 'View'"
+                @click="showSearch = !showSearch"
+              ></ft-icon>
+            </el-tooltip>
+          </div>
+        </div>
+
+        <!-- 表格 -->
+        <div class="table-card">
+          <el-table
+            v-loading="loading"
+            :data="pagedList"
+            :class="{ 'no-data': pagedList.length === 0 }"
+            row-key="patientId"
+            @selection-change="handleSelectionChange"
+            @sort-change="handleSortChange"
+          >
+            <el-table-column type="selection" width="48"></el-table-column>
+            <el-table-column
+              type="index"
+              label="#"
+              width="60"
+              :index="indexMethod"
+            ></el-table-column>
+            <el-table-column
+              v-if="colVisible('patientNo')"
+              prop="patientNo"
+              label="Patient No"
+              width="150"
+              sortable="custom"
+            ></el-table-column>
+            <el-table-column
+              v-if="colVisible('name')"
+              prop="name"
+              label="Patient"
+              min-width="220"
+            >
+              <template #default="scope">
+                <div class="cell-user">
+                  <div class="cell-avatar">{{ scope.row.initials }}</div>
+                  <div>
+                    <div class="cell-name">
+                      {{ scope.row.name }}
+                      <el-tag v-if="scope.row.isVip" size="small" effect="plain" type="warning">
+                        VIP
+                      </el-tag>
+                    </div>
+                    <div class="cell-email">{{ scope.row.email }}</div>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-if="colVisible('gender')"
+              prop="gender"
+              label="Gender / Age"
+              width="140"
+            >
+              <template #default="scope">{{ scope.row.gender }} / {{ scope.row.age }}</template>
+            </el-table-column>
+            <el-table-column
+              v-if="colVisible('clinician')"
+              prop="clinician"
+              label="Clinician"
+              width="160"
+            ></el-table-column>
+            <el-table-column
+              v-if="colVisible('caseType')"
+              prop="caseType"
+              label="Case type"
+              min-width="170"
+              show-overflow-tooltip
+            ></el-table-column>
+            <el-table-column
+              v-if="colVisible('status')"
+              prop="status"
+              label="Status"
+              width="120"
+            >
+              <template #default="scope">
+                <el-tag :type="scope.row.statusTag" effect="light">
+                  {{ scope.row.statusLabel }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-if="colVisible('lastVisit')"
+              prop="lastVisit"
+              label="Last visit"
+              width="170"
+              sortable="custom"
+            >
+              <template #default="scope">{{ format(scope.row.lastVisit) }}</template>
+            </el-table-column>
+            <el-table-column label="Operation" width="190" fixed="right">
+              <template #default="scope">
+                <el-button link type="primary" @click="handleView(scope.row)">Detail</el-button>
+                <el-button link type="primary" @click="handleEdit(scope.row)">Edit</el-button>
+                <el-button
+                  v-if="scope.row.status !== '0'"
+                  link
+                  type="danger"
+                  @click="handleDelete(scope.row)"
+                >Delete</el-button>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <div style="padding: 24px 0">
+                <el-empty description="No data" :image-size="80"></el-empty>
+              </div>
+            </template>
+          </el-table>
+        </div>
+
+        <!-- 分页 -->
+        <div class="pagination-container">
+          <el-pagination
+            background
+            :current-page="pageNum"
+            :page-size="pageSize"
+            :page-sizes="[10, 20, 30, 50]"
+            :total="total"
+            layout="total, sizes, prev, pager, next, jumper"
+            @size-change="handleSizeChange"
+            @current-change="handleCurrentChange"
+          ></el-pagination>
+        </div>
+      </div>
+    </div>
+
+    <div id="tpl-boot-loading" style="padding: 40px; color: #999">Loading template…</div>
+
+    <script>
+      var EMPTY_QUERY = function () {
+        return {
+          keyword: '',
+          clinicianId: null,
+          caseType: '',
+          status: '',
+          dateRange: []
+        }
+      }
+
+      window.__TPL_PAGE__ = {
+        name: 'StandardListPage',
+        data: function () {
+          return {
+            embed: Tpl.isEmbed(),
+            loading: false,
+            showSearch: true,
+            sourceList: Tpl.mock.patients(43),
+            pagedList: [],
+            total: 0,
+            pageNum: 1,
+            pageSize: 10,
+            queryParams: EMPTY_QUERY(),
+            clinicians: Tpl.dict.clinicians,
+            caseTypes: Tpl.dict.caseTypes,
+            statusOptions: Tpl.dict.status,
+            sortProp: '',
+            sortOrder: '',
+            selectedIds: [],
+            columns: [
+              { key: 'patientNo', label: 'Patient No', visible: true },
+              { key: 'name', label: 'Patient', visible: true },
+              { key: 'gender', label: 'Gender / Age', visible: true },
+              { key: 'clinician', label: 'Clinician', visible: true },
+              { key: 'caseType', label: 'Case type', visible: true },
+              { key: 'status', label: 'Status', visible: true },
+              { key: 'lastVisit', label: 'Last visit', visible: true }
+            ]
+          }
+        },
+        computed: {
+          filteredList: function () {
+            var query = this.queryParams
+            var keyword = (query.keyword || '').toLowerCase().trim()
+            return this.sourceList.filter(function (row) {
+              var hitKeyword =
+                !keyword ||
+                row.name.toLowerCase().indexOf(keyword) > -1 ||
+                row.patientNo.toLowerCase().indexOf(keyword) > -1 ||
+                row.email.toLowerCase().indexOf(keyword) > -1
+              var hitClinician = !query.clinicianId || row.clinicianId === query.clinicianId
+              var hitCaseType = !query.caseType || row.caseType === query.caseType
+              // el-select 清空后可能是 ''/null/undefined，统一按"不限"处理
+              var hitStatus =
+                ['', null, undefined].indexOf(query.status) > -1 ||
+                row.status === query.status
+              var hitRange = true
+              if (query.dateRange && query.dateRange.length === 2) {
+                var start = new Date(query.dateRange[0] + ' 00:00:00').getTime()
+                var end = new Date(query.dateRange[1] + ' 23:59:59').getTime()
+                hitRange = row.createTime >= start && row.createTime <= end
+              }
+              return hitKeyword && hitClinician && hitCaseType && hitStatus && hitRange
+            })
+          }
+        },
+        methods: {
+          format: function (value) {
+            return Tpl.formatTime(value, 'YYYY-MM-DD HH:mm')
+          },
+          colVisible: function (key) {
+            var col = this.columns.filter(function (item) {
+              return item.key === key
+            })[0]
+            return col ? col.visible : true
+          },
+          indexMethod: function (index) {
+            return (this.pageNum - 1) * this.pageSize + index + 1
+          },
+          /** 本地模拟请求：真实项目替换为 src/api/<domain> 的 list 接口 */
+          getList: function () {
+            var self = this
+            this.loading = true
+            var list = this.filteredList.slice()
+            if (this.sortProp && this.sortOrder) {
+              var prop = this.sortProp
+              var desc = this.sortOrder === 'descending'
+              list.sort(function (a, b) {
+                if (a[prop] > b[prop]) return desc ? -1 : 1
+                if (a[prop] < b[prop]) return desc ? 1 : -1
+                return 0
+              })
+            }
+            window.setTimeout(function () {
+              self.total = list.length
+              self.pagedList = Tpl.paginate(list, self.pageNum, self.pageSize)
+              self.loading = false
+            }, 260)
+          },
+          handleQuery: function () {
+            this.pageNum = 1
+            this.getList()
+          },
+          resetQuery: function () {
+            this.queryParams = EMPTY_QUERY()
+            this.sortProp = ''
+            this.sortOrder = ''
+            this.pageNum = 1
+            this.getList()
+            this.$message({ message: 'Search conditions reset', type: 'success' })
+          },
+          handleSortChange: function (payload) {
+            this.sortProp = payload.order ? payload.prop : ''
+            this.sortOrder = payload.order || ''
+            this.pageNum = 1
+            this.getList()
+          },
+          handleSizeChange: function (size) {
+            this.pageSize = size
+            this.pageNum = 1
+            this.getList()
+          },
+          handleCurrentChange: function (page) {
+            this.pageNum = page
+            this.getList()
+          },
+          handleSelectionChange: function (rows) {
+            this.selectedIds = rows.map(function (row) {
+              return row.patientId
+            })
+          },
+          clearSelection: function () {
+            this.selectedIds = []
+            this.$message({ message: 'Selection cleared', type: 'info' })
+          },
+          batchRemove: function () {
+            var self = this
+            var count = this.selectedIds.length
+            this.$confirm('Delete ' + count + ' selected patient(s)?', 'Warning', {
+              type: 'warning'
+            })
+              .then(function () {
+                self.$message({ message: 'Deleted ' + count + ' record(s)', type: 'success' })
+              })
+              .catch(function () {})
+          },
+          handleAdd: function () {
+            this.$message({ message: '新增：对应 03-dialog-form.html 弹框表单模板', type: 'info' })
+          },
+          handleEdit: function (row) {
+            this.$message({ message: 'Edit ' + row.patientNo + '：弹框表单模板', type: 'info' })
+          },
+          handleView: function (row) {
+            this.$message({ message: 'Detail ' + row.patientNo + '：侧滑详情模板', type: 'info' })
+          },
+          handleDelete: function (row) {
+            var self = this
+            this.$confirm('Delete patient ' + row.name + '?', 'Warning', { type: 'warning' })
+              .then(function () {
+                self.$message({ message: 'Deleted', type: 'success' })
+              })
+              .catch(function () {})
+          },
+          handleExport: function () {
+            this.$message({ message: 'Export：复用 src/utils/request.js 的 download()', type: 'info' })
+          }
+        },
+        mounted: function () {
+          this.getList()
+        }
+      }
+    </script>
+    <script src="assets/template.js"></script>
+  </body>
+</html>

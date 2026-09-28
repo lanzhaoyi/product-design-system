@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>框架页模板 · FasTreat Admin</title>
+    <!-- Element Plus 样式：本地 node_modules 优先，失败回退 CDN -->
+    <link
+      rel="stylesheet"
+      href="../node_modules/element-plus/dist/index.css"
+      onerror="this.onerror=null;this.href='https://unpkg.com/element-plus@2.9.7/dist/index.css'"
+    />
+    <link rel="stylesheet" href="assets/template.css" />
+  </head>
+  <body>
+    <!--
+      ============================================================================
+      模板 01：框架页（左侧导航 + 顶部信息）
+      ============================================================================
+      对应项目实现：
+        src/layout/index.vue                       布局壳层（sidebar + main-container）
+        src/layout/components/Sidebar/index.vue    侧边菜单（数据来自 /getRouters）
+        src/layout/components/Navbar.vue           顶栏（面包屑 / 用户菜单）
+        src/layout/components/AppMain.vue          内容区（router-view + keep-alive）
+        src/store/modules/app.js                   sidebar.opened / device
+
+      使用方式：子页面放在 src/views/**，通过 src/router + /getRouters 动态挂载，
+      页面内不要再实现壳层，根节点统一使用 .app-container。
+
+      静态模板约定（5 个模板页一致）：
+        - 标记使用 kebab-case；组件必须写完整闭合标签（in-DOM 模板不支持自闭合）；
+        - 页面末尾先定义 window.__TPL_PAGE__，再引入 assets/template.js。
+      ============================================================================
+    -->
+    <div id="app" v-cloak>
+      <div class="app-wrapper" :class="{ 'hide-sidebar': isCollapse }">
+        <!-- ===================== 左侧导航 ===================== -->
+        <aside class="sidebar-container">
+          <div class="sidebar-logo-container">
+            <a class="sidebar-logo-link" href="javascript:void(0)" @click="goHome">
+              <div class="logo-title-wrap">
+                <div class="logo-mark">F</div>
+                <span class="logo-text">FasTreat</span>
+              </div>
+              <el-divider></el-divider>
+            </a>
+          </div>
+
+          <el-scrollbar class="sidebar-scrollbar">
+            <el-menu
+              class="sidebar-menu"
+              :default-active="activeMenu"
+              :collapse="isCollapse"
+              :collapse-transition="false"
+              @select="handleMenuSelect"
+            >
+              <el-menu-item index="welcome">
+                <ft-icon name="HomeFilled"></ft-icon>
+                <template #title>
+                  <span class="menu-title">Dashboard</span>
+                </template>
+              </el-menu-item>
+
+              <el-sub-menu index="patient">
+                <template #title>
+                  <ft-icon name="User"></ft-icon>
+                  <span class="menu-title">Patient</span>
+                </template>
+                <el-menu-item index="list.html">Patient List</el-menu-item>
+                <el-menu-item index="drawer-detail.html">Patient Detail</el-menu-item>
+              </el-sub-menu>
+
+              <el-sub-menu index="appointment">
+                <template #title>
+                  <ft-icon name="Calendar"></ft-icon>
+                  <span class="menu-title">Appointment</span>
+                </template>
+                <el-menu-item index="dialog-form.html">New Appointment</el-menu-item>
+                <el-menu-item index="multi-select-dialog.html">Assign Clinicians</el-menu-item>
+              </el-sub-menu>
+
+              <el-menu-item index="settings">
+                <ft-icon name="Setting"></ft-icon>
+                <template #title>
+                  <span class="menu-title">Settings</span>
+                </template>
+              </el-menu-item>
+
+              <el-menu-item index="external">
+                <ft-icon name="Link"></ft-icon>
+                <template #title>
+                  <span class="menu-title">External Doc</span>
+                </template>
+              </el-menu-item>
+            </el-menu>
+          </el-scrollbar>
+        </aside>
+
+        <!-- ===================== 主区域 ===================== -->
+        <div class="main-container">
+          <!-- 顶部信息栏 -->
+          <header class="navbar">
+            <ft-icon
+              class="hamburger"
+              :name="isCollapse ? 'Expand' : 'Fold'"
+              @click="toggleCollapse"
+            ></ft-icon>
+
+            <el-breadcrumb separator="/">
+              <el-breadcrumb-item
+                v-for="(item, index) in breadcrumbs"
+                :key="index"
+              >{{ item }}</el-breadcrumb-item>
+            </el-breadcrumb>
+
+            <div class="right-menu">
+              <el-button type="primary" plain @click="onSwitchRegion">
+                <ft-icon name="Refresh" class="mr8"></ft-icon>
+                <span>Switch to UK EHR</span>
+              </el-button>
+
+              <el-badge :value="3" :offset="[-4, 4]">
+                <ft-icon class="hamburger" name="Bell" @click="onNotify"></ft-icon>
+              </el-badge>
+
+              <el-dropdown trigger="click" @command="handleUserCommand">
+                <div class="user-avatar">DR</div>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="profile">Profile</el-dropdown-item>
+                    <el-dropdown-item command="password">Reset password</el-dropdown-item>
+                    <el-dropdown-item command="layout" divided>Layout settings</el-dropdown-item>
+                    <el-dropdown-item command="logout" divided>Sign out</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </header>
+
+          <!-- 内容区：菜单点击后在此渲染具体页面 -->
+          <main class="app-main">
+            <iframe
+              v-if="frameSrc"
+              class="frame-iframe"
+              :src="frameSrc"
+              title="content"
+            ></iframe>
+
+            <!-- 默认视图 -->
+            <div v-else class="welcome-panel">
+              <h1>FasTreat Admin · 静态页面模板</h1>
+              <div class="welcome-sub">
+                本页对应框架壳层（src/layout）。点击左侧菜单或下方卡片，内容区会加载对应
+                模板页；真实项目中该区域由 AppMain.vue 的 router-view 渲染。
+              </div>
+
+              <div class="tpl-notes">
+                <div class="tpl-notes-title">框架页结构说明</div>
+                <ul>
+                  <li>
+                    侧边栏 240px（收起 54px），菜单数据来自 permission.js 的 /getRouters，
+                    图标取自动态路由的 meta.icon
+                  </li>
+                  <li>
+                    顶栏 80px：hamburger / 面包屑 / 右侧用户菜单；settings.tagsView 默认
+                    false，需要多页签时在此处补 TagsView
+                  </li>
+                  <li>
+                    内容区高度 calc(100vh - 80px)，页面统一使用 .app-container（padding 24px）
+                  </li>
+                  <li>
+                    iframe 仅用于静态演示；真实项目用 &lt;router-view&gt; + keep-alive
+                  </li>
+                </ul>
+              </div>
+
+              <div class="welcome-grid">
+                <div
+                  v-for="item in templates"
+                  :key="item.file"
+                  class="welcome-card"
+                  @click="openTemplate(item)"
+                >
+                  <div class="card-title">
+                    <ft-icon :name="item.icon"></ft-icon>
+                    <span>{{ item.title }}</span>
+                  </div>
+                  <div class="card-desc">{{ item.desc }}</div>
+                  <span class="card-file">{{ item.file }}</span>
+                </div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+
+    <div id="tpl-boot-loading" style="padding: 40px; color: #999">Loading template…</div>
+
+    <script>
+      /** 模板文件 -> 菜单高亮 key（真实项目中由 route.path / activeMenu 决定） */
+      var MENU_BY_FILE = {
+        'list.html': { key: 'patient-list', crumb: ['Patient', 'Patient List'] },
+        'drawer-detail.html': { key: 'patient-detail', crumb: ['Patient', 'Patient Detail'] },
+        'dialog-form.html': { key: 'appointment-new', crumb: ['Appointment', 'New Appointment'] },
+        'multi-select-dialog.html': {
+          key: 'appointment-assign',
+          crumb: ['Appointment', 'Assign Clinicians']
+        }
+      }
+
+      function mapFileToMenu(file) {
+        return MENU_BY_FILE[file] ? MENU_BY_FILE[file].key : 'welcome'
+      }
+
+      window.__TPL_PAGE__ = {
+        name: 'LayoutFrame',
+        data: function () {
+          return {
+            isCollapse: false,
+            activeMenu: 'welcome',
+            frameSrc: '',
+            templates: [
+              {
+                file: 'list.html',
+                icon: 'Tickets',
+                title: '标准列表',
+                desc: '搜索区 / 操作栏 / 表格 / 分页 / 列显隐，列表页通用骨架。'
+              },
+              {
+                file: 'dialog-form.html',
+                icon: 'EditPen',
+                title: '弹框表单',
+                desc: 'el-dialog + el-form，两列布局、校验规则、提交态与草稿。'
+              },
+              {
+                file: 'drawer-detail.html',
+                icon: 'Document',
+                title: '侧滑详情',
+                desc: 'el-drawer 右侧滑出，分组信息 + Tabs + 底部操作条。'
+              },
+              {
+                file: 'multi-select-dialog.html',
+                icon: 'Select',
+                title: '多选弹框',
+                desc: '表格多选 + 已选标签 + 跨页保留 + 全选 / 清空。'
+              }
+            ]
+          }
+        },
+        computed: {
+          breadcrumbs: function () {
+            if (this.activeMenu === 'welcome') return ['Dashboard']
+            if (this.activeMenu === 'settings') return ['System', 'Settings']
+            if (this.activeMenu === 'external') return ['External Doc']
+            for (var file in MENU_BY_FILE) {
+              if (MENU_BY_FILE[file].key === this.activeMenu) {
+                return MENU_BY_FILE[file].crumb
+              }
+            }
+            return ['Dashboard']
+          }
+        },
+        methods: {
+          toggleCollapse: function () {
+            this.isCollapse = !this.isCollapse
+          },
+          goHome: function () {
+            this.activeMenu = 'welcome'
+            this.frameSrc = ''
+          },
+          handleMenuSelect: function (index) {
+            if (index === 'welcome') return this.goHome()
+            if (index === 'settings' || index === 'external') {
+              // 真实项目：settings 属于 constantRoutes；外链走 InnerLink / iframe
+              this.activeMenu = index
+              this.frameSrc = ''
+              this.$message({
+                message:
+                  index === 'settings'
+                    ? 'Settings 对应 constantRoutes 内的固定页面'
+                    : '外链在项目中由 InnerLink / iframe 打开',
+                type: 'info'
+              })
+              return
+            }
+            this.activeMenu = mapFileToMenu(index)
+            this.frameSrc = index + '?embed=1'
+          },
+          openTemplate: function (item) {
+            this.activeMenu = mapFileToMenu(item.file)
+            this.frameSrc = item.file + '?embed=1'
+          },
+          handleUserCommand: function (command) {
+            this.$message({ message: '用户菜单：' + command, type: 'info' })
+          },
+          onSwitchRegion: function () {
+            this.$message({ message: '切换站点 / EHR，真实实现见环境配置', type: 'info' })
+          },
+          onNotify: function () {
+            this.$message({ message: '消息中心', type: 'info' })
+          }
+        }
+      }
+    </script>
+    <script src="assets/template.js"></script>
+  </body>
+</html>

@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>05 多选弹框模板 · FasTreat Admin</title>
+    <link
+      rel="stylesheet"
+      href="../node_modules/element-plus/dist/index.css"
+      onerror="this.onerror=null;this.href='https://unpkg.com/element-plus@2.9.7/dist/index.css'"
+    />
+    <link rel="stylesheet" href="assets/template.css" />
+    <style>
+      .picker-filters {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .picker-table {
+        border: 1px solid var(--tpl-border);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .selected-bar .selected-count {
+        font-size: 13px;
+        color: var(--tpl-text-secondary);
+        margin-right: 4px;
+      }
+      .empty-assign {
+        padding: 24px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      ============================================================================
+      模板 05：多选弹框页（表格多选 + 已选回显）
+      ============================================================================
+      对应项目实现：
+        src/views/system/role/selectUser.vue 等        选择用户 / 分配人员弹框
+        el-table type="selection" + reserve-selection  跨页保留选择
+        el-tag closable                                已选回显与单个移除
+
+      要点：
+        - 表格加 <row-key> 与 selection 列 <reserve-selection> 才能跨页保留；
+        - selection-change 返回的是"全部已选"（含跨页），不要只用当前页数据；
+        - 不可选行用 <el-table-column type="selection" :selectable="fn"> 控制；
+        - 确认时把 id 数组交回父级，由父级调用接口，弹框内不发请求。
+      ============================================================================
+    -->
+    <div id="app" v-cloak>
+      <div class="app-container">
+        <div class="page-header">
+          <div>
+            <h2>Care Team</h2>
+            <div class="page-desc">
+              多选弹框模板：从医生/护士列表中多选分配，支持跨页保留与已选回显。
+            </div>
+          </div>
+          <div>
+            <el-button type="primary" :disabled="!assigned.length" plain @click="handleSave">
+              <ft-icon name="Check" class="mr8"></ft-icon>
+              <span>Save care team</span>
+            </el-button>
+            <el-button type="primary" @click="openPicker">
+              <ft-icon name="Plus" class="mr8"></ft-icon>
+              <span>Assign clinicians</span>
+            </el-button>
+          </div>
+        </div>
+
+        <div class="tpl-notes" v-if="!embed">
+          <div class="tpl-notes-title">使用说明</div>
+          <ul>
+            <li>selection 列必须配 <code>row-key</code> + <code>reserve-selection</code> 才能跨页保留</li>
+            <li>已选条用 <code>.selected-bar</code> 展示 <code>el-tag closable</code>，支持单个移除</li>
+            <li>确认按钮上显示已选数量，数量为 0 时禁用；确认后由父级统一提交接口</li>
+            <li>回填已有数据时用 <code>tableRef.toggleRowSelection(row, true)</code>，需在数据渲染后执行</li>
+          </ul>
+        </div>
+
+        <div class="table-card">
+          <el-table :data="assigned" row-key="id">
+            <el-table-column type="index" label="#" width="60"></el-table-column>
+            <el-table-column prop="name" label="Clinician" min-width="180"></el-table-column>
+            <el-table-column prop="dept" label="Department" width="180"></el-table-column>
+            <el-table-column prop="role" label="Role" width="180"></el-table-column>
+            <el-table-column label="Patients" width="110" align="center">
+              <template #default="scope">{{ scope.row.patients }}</template>
+            </el-table-column>
+            <el-table-column label="Operation" width="110" fixed="right">
+              <template #default="scope">
+                <el-button link type="danger" @click="removeAssigned(scope.row)">Remove</el-button>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <div class="empty-assign">
+                <el-empty description="No clinician assigned yet" :image-size="80"></el-empty>
+              </div>
+            </template>
+          </el-table>
+        </div>
+
+        <!-- ==================== 多选弹框 ==================== -->
+        <el-dialog
+          v-model="open"
+          title="Assign clinicians"
+          width="820px"
+          top="7vh"
+          append-to-body
+          :close-on-click-modal="false"
+          @closed="handleClosed"
+        >
+          <!-- 筛选 -->
+          <div class="picker-filters">
+            <el-input
+              v-model="keyword"
+              placeholder="Search by name / department"
+              clearable
+              style="width: 260px"
+              @keyup.enter="handleSearch"
+            >
+              <template #prefix>
+                <ft-icon name="Search"></ft-icon>
+              </template>
+            </el-input>
+            <el-select v-model="dept" placeholder="All departments" clearable style="width: 200px">
+              <el-option
+                v-for="item in depts"
+                :key="item"
+                :label="item"
+                :value="item"
+              ></el-option>
+            </el-select>
+            <el-checkbox v-model="onlyAvailable">Only available</el-checkbox>
+            <el-button plain @click="handleSearch">
+              <ft-icon name="Search" class="mr8"></ft-icon>
+              <span>Search</span>
+            </el-button>
+          </div>
+
+          <!-- 表格多选 -->
+          <div class="picker-table">
+            <el-table
+              ref="selectTable"
+              v-loading="loading"
+              :data="pagedCandidates"
+              row-key="id"
+              height="320"
+              @selection-change="handleSelectionChange"
+              @select-all="handleSelectAll"
+            >
+              <el-table-column
+                type="selection"
+                width="48"
+                :selectable="rowSelectable"
+                reserve-selection
+              ></el-table-column>
+              <el-table-column prop="name" label="Clinician" min-width="170">
+                <template #default="scope">
+                  <span>{{ scope.row.name }}</span>
+                  <el-tag
+                    v-if="!scope.row.available"
+                    size="small"
+                    type="info"
+                    effect="plain"
+                    class="ml8"
+                  >Unavailable</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="dept" label="Department" width="160"></el-table-column>
+              <el-table-column prop="role" label="Role" width="160"></el-table-column>
+              <el-table-column prop="patients" label="Patients" width="90" align="center"></el-table-column>
+              <el-table-column label="Current load" min-width="150">
+                <template #default="scope">
+                  <el-progress
+                    :percentage="scope.row.load"
+                    :stroke-width="8"
+                    :show-text="false"
+                  ></el-progress>
+                  <span class="text-placeholder" style="font-size: 12px">
+                    {{ scope.row.patients }} / {{ scope.row.capacity }}
+                  </span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <!-- 表头操作 + 已选回显 -->
+          <div class="transfer-header">
+            <span>
+              Total {{ candidates.length }} · Selected on this page
+              {{ pageSelectedCount }} · All selected {{ selection.length }}
+            </span>
+            <span>
+              <el-button link type="primary" @click="selectAllAvailable">Select all available</el-button>
+              <el-button link @click="clearSelection">Clear</el-button>
+            </span>
+          </div>
+          <div class="selected-bar">
+            <span class="selected-count">Selected ({{ selection.length }}):</span>
+            <template v-if="selection.length">
+              <el-tag
+                v-for="item in selection"
+                :key="item.id"
+                closable
+                effect="plain"
+                type="primary"
+                @close="removeSelection(item)"
+              >{{ item.name }}</el-tag>
+            </template>
+            <span v-else class="selected-empty">
+              No clinician selected — 勾选后此处回显，可逐个移除
+            </span>
+          </div>
+
+          <div class="pagination-container">
+            <el-pagination
+              small
+              background
+              :current-page="pageNum"
+              :page-size="pageSize"
+              :page-sizes="[5, 10, 20]"
+              :total="candidates.length"
+              layout="total, sizes, prev, pager, next"
+              @size-change="handleSizeChange"
+              @current-change="handleCurrentChange"
+            ></el-pagination>
+          </div>
+
+          <template #footer>
+            <el-button plain @click="open = false">Cancel</el-button>
+            <el-button type="primary" :disabled="!selection.length" @click="confirm">
+              Confirm ({{ selection.length }})
+            </el-button>
+          </template>
+        </el-dialog>
+      </div>
+    </div>
+
+    <div id="tpl-boot-loading" style="padding: 40px; color: #999">Loading template…</div>
+
+    <script>
+      window.__TPL_PAGE__ = {
+        name: 'MultiSelectDialogPage',
+        data: function () {
+          return {
+            embed: Tpl.isEmbed(),
+            open: false,
+            loading: false,
+            keyword: '',
+            dept: '',
+            onlyAvailable: false,
+            pageNum: 1,
+            pageSize: 5,
+            /** 候选池（真实项目来自 listClinician 接口） */
+            candidates: Tpl.dict.clinicians.map(function (item, index) {
+              return {
+                id: item.id,
+                name: item.name,
+                dept: item.dept,
+                role: item.role,
+                available: index % 4 !== 3,
+                patients: 4 + index * 2,
+                capacity: 30,
+                load: Math.min(96, 12 + index * 9)
+              }
+            }),
+            /** 弹框内已选（含跨页保留） */
+            selection: [],
+            /** 页面外已分配 */
+            assigned: []
+          }
+        },
+        computed: {
+          depts: function () {
+            var set = []
+            this.candidates.forEach(function (item) {
+              if (set.indexOf(item.dept) === -1) set.push(item.dept)
+            })
+            return set
+          },
+          filteredCandidates: function () {
+            var keyword = (this.keyword || '').toLowerCase().trim()
+            return this.candidates.filter(function (item) {
+              var hitKeyword =
+                !keyword ||
+                item.name.toLowerCase().indexOf(keyword) > -1 ||
+                item.dept.toLowerCase().indexOf(keyword) > -1
+              var hitDept = !this.dept || item.dept === this.dept
+              var hitAvailable = !this.onlyAvailable || item.available
+              return hitKeyword && hitDept && hitAvailable
+            }, this)
+          },
+          pagedCandidates: function () {
+            return Tpl.paginate(this.filteredCandidates, this.pageNum, this.pageSize)
+          },
+          pageSelectedCount: function () {
+            var selectionIds = this.selection.map(function (item) {
+              return item.id
+            })
+            return this.pagedCandidates.filter(function (row) {
+              return selectionIds.indexOf(row.id) > -1
+            }).length
+          }
+        },
+        methods: {
+          /** 不可选行：停诊/已满员的医生 */
+          rowSelectable: function (row) {
+            return row.available
+          },
+          openPicker: function () {
+            var self = this
+            this.open = true
+            this.keyword = ''
+            this.dept = ''
+            this.onlyAvailable = false
+            this.pageNum = 1
+            this.selection = []
+            this.loading = true
+            window.setTimeout(function () {
+              self.loading = false
+              self.restoreSelection()
+            }, 260)
+          },
+          /** 回填已有数据：必须在数据渲染之后再 toggleRowSelection */
+          restoreSelection: function () {
+            var self = this
+            this.$nextTick(function () {
+              var table = self.$refs.selectTable
+              if (!table) return
+              self.assigned.forEach(function (item) {
+                var row = self.candidates.filter(function (cand) {
+                  return cand.id === item.id
+                })[0]
+                if (row) table.toggleRowSelection(row, true)
+              })
+            })
+          },
+          handleSearch: function () {
+            this.pageNum = 1
+            this.$message({ message: '查询条件已应用', type: 'info' })
+          },
+          handleSelectionChange: function (rows) {
+            this.selection = rows
+          },
+          handleSelectAll: function (rows) {
+            // reserve-selection 下全选只作用于当前页，这里仅做提示
+            this.$message({
+              message: '当前页全选：选中 ' + rows.length + ' 行（跨页选择会保留）',
+              type: 'info'
+            })
+          },
+          selectAllAvailable: function () {
+            var self = this
+            var table = this.$refs.selectTable
+            if (!table) return
+            this.candidates.forEach(function (row) {
+              if (row.available) table.toggleRowSelection(row, true)
+            })
+            this.$nextTick(function () {
+              self.$message({
+                message: '已选中全部可用医生（' + self.selection.length + '）',
+                type: 'success'
+              })
+            })
+          },
+          clearSelection: function () {
+            var table = this.$refs.selectTable
+            if (table) table.clearSelection()
+            this.selection = []
+          },
+          removeSelection: function (item) {
+            var table = this.$refs.selectTable
+            var row = this.candidates.filter(function (cand) {
+              return cand.id === item.id
+            })[0]
+            if (table && row) table.toggleRowSelection(row, false)
+            this.selection = this.selection.filter(function (cand) {
+              return cand.id !== item.id
+            })
+          },
+          handleSizeChange: function (size) {
+            this.pageSize = size
+            this.pageNum = 1
+          },
+          handleCurrentChange: function (page) {
+            this.pageNum = page
+          },
+          confirm: function () {
+            this.assigned = this.selection.slice()
+            this.open = false
+            this.$message({
+              message: 'Assigned ' + this.assigned.length + ' clinician(s)',
+              type: 'success'
+            })
+          },
+          handleClosed: function () {
+            var table = this.$refs.selectTable
+            if (table) table.clearSelection()
+          },
+          removeAssigned: function (row) {
+            var self = this
+            this.$confirm('Remove ' + row.name + ' from care team?', 'Warning', {
+              type: 'warning'
+            })
+              .then(function () {
+                self.assigned = self.assigned.filter(function (item) {
+                  return item.id !== row.id
+                })
+                self.$message({ message: 'Removed', type: 'success' })
+              })
+              .catch(function () {})
+          },
+          handleSave: function () {
+            var ids = this.assigned.map(function (item) {
+              return item.id
+            })
+            this.$message({
+              message: '提交：POST /care-team  body = { clinicianIds: [' + ids.join(',') + '] }',
+              type: 'success'
+            })
+          }
+        }
+      }
+    </script>
+    <script src="assets/template.js"></script>
+  </body>
+</html>

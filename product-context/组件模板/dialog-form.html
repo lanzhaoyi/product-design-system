@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>03 弹框表单模板 · FasTreat Admin</title>
+    <link
+      rel="stylesheet"
+      href="../node_modules/element-plus/dist/index.css"
+      onerror="this.onerror=null;this.href='https://unpkg.com/element-plus@2.9.7/dist/index.css'"
+    />
+    <link rel="stylesheet" href="assets/template.css" />
+    <style>
+      .dialog-tip {
+        margin: 0 0 12px;
+        font-size: 13px;
+        color: var(--tpl-text-placeholder);
+      }
+      .dialog-footer-bar {
+        display: flex;
+        align-items: center;
+      }
+      .dialog-footer-bar .footer-left {
+        margin-right: auto;
+        font-size: 12px;
+        color: var(--tpl-text-placeholder);
+      }
+      .form-section-title {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 4px 0 12px;
+        padding-left: 8px;
+        border-left: 3px solid var(--tpl-purple);
+        line-height: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      ============================================================================
+      模板 03：弹框表单页（el-dialog + el-form）
+      ============================================================================
+      对应项目实现：
+        src/views/system/dept/index.vue            列表页内新增/编辑弹框（同一套 form）
+        src/components/DictTag、FileUpload 等        弹框内常见字段组件
+        src/utils/request.js                        提交统一走 request 实例
+
+      要点：
+        - 新增与编辑共用一个 dialog，用 form.xxxId 是否存在判断模式；
+        - 打开弹框时用 resetFields() 清理校验，编辑用 nextTick 回填；
+        - 提交按钮 loading 防抖，成功后 emit 事件让父列表刷新；
+        - 弹框内表单校验失败时不要关闭弹框，不要用 setTimeout 掩盖异步。
+      ============================================================================
+    -->
+    <div id="app" v-cloak>
+      <div class="app-container">
+        <div class="page-header">
+          <div>
+            <h2>Appointment</h2>
+            <div class="page-desc">
+              弹框表单模板：列表页 +「新增 / 编辑」弹框，含两列布局、校验、提交态。
+            </div>
+          </div>
+          <div>
+            <el-button type="primary" @click="openCreate">
+              <ft-icon name="Plus" class="mr8"></ft-icon>
+              <span>New Appointment</span>
+            </el-button>
+          </div>
+        </div>
+
+        <div class="tpl-notes" v-if="!embed">
+          <div class="tpl-notes-title">使用说明</div>
+          <ul>
+            <li>弹框宽度按字段量选择：单列表单 600px，双列表单 720~900px</li>
+            <li><code>:close-on-click-modal="false"</code> 防止误点遮罩丢失录入</li>
+            <li>校验用 <code>rules</code> + <code>formRef.validate()</code>，禁止手动 if 判断必填</li>
+            <li>保存成功后 <code>emit</code> 刷新父级列表；编辑态先回填再打开弹框</li>
+          </ul>
+        </div>
+
+        <div class="table-card">
+          <el-table :data="list" row-key="id" v-loading="listLoading">
+            <el-table-column prop="appointmentNo" label="No" width="110"></el-table-column>
+            <el-table-column prop="patientName" label="Patient" min-width="180"></el-table-column>
+            <el-table-column prop="clinicianName" label="Clinician" width="170"></el-table-column>
+            <el-table-column prop="caseType" label="Case type" min-width="170"></el-table-column>
+            <el-table-column label="Start time" width="170">
+              <template #default="scope">{{ format(scope.row.startTime) }}</template>
+            </el-table-column>
+            <el-table-column label="Duration" width="100">
+              <template #default="scope">{{ scope.row.duration }} min</template>
+            </el-table-column>
+            <el-table-column label="Status" width="120">
+              <template #default="scope">
+                <el-tag :type="Tpl.statusTag(scope.row.status)" effect="light">
+                  {{ Tpl.statusLabel(scope.row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="Operation" width="150" fixed="right">
+              <template #default="scope">
+                <el-button link type="primary" @click="openEdit(scope.row)">Edit</el-button>
+                <el-button link type="danger" @click="removeRow(scope.row)">Delete</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- ==================== 弹框表单 ==================== -->
+        <el-dialog
+          v-model="open"
+          :title="dialogTitle"
+          width="760px"
+          top="8vh"
+          append-to-body
+          :close-on-click-modal="false"
+          :close-on-press-escape="false"
+          @closed="handleClosed"
+        >
+          <p class="dialog-tip">
+            带 <span style="color: var(--tpl-danger)">*</span> 的为必填项；
+            选择「Async Message」时需要填写联系邮箱（动态校验示例）。
+          </p>
+
+          <el-form
+            ref="formRef"
+            :model="form"
+            :rules="rules"
+            label-width="140px"
+            label-position="right"
+          >
+            <div class="form-section-title">Patient &amp; Clinician</div>
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="Patient" prop="patientId">
+                  <el-select
+                    v-model="form.patientId"
+                    placeholder="Please select a patient"
+                    filterable
+                    clearable
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="item in patients"
+                      :key="item.patientId"
+                      :label="item.name + ' · ' + item.patientNo"
+                      :value="item.patientId"
+                    ></el-option>
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="Clinician" prop="clinicianId">
+                  <el-select
+                    v-model="form.clinicianId"
+                    placeholder="Please select a clinician"
+                    filterable
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="item in clinicians"
+                      :key="item.id"
+                      :label="item.name + '（' + item.dept + '）'"
+                      :value="item.id"
+                    ></el-option>
+                  </el-select>
+                </el-form-item>
+              </el-col>
+            </el-row>
+
+            <div class="form-section-title">Schedule</div>
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="Case type" prop="caseType">
+                  <el-select
+                    v-model="form.caseType"
+                    placeholder="Please select a case type"
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="item in caseTypes"
+                      :key="item"
+                      :label="item"
+                      :value="item"
+                    ></el-option>
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="Channel" prop="channel">
+                  <el-select
+                    v-model="form.channel"
+                    placeholder="Please select a channel"
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="item in channels"
+                      :key="item"
+                      :label="item"
+                      :value="item"
+                    ></el-option>
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="Date" prop="date">
+                  <el-date-picker
+                    v-model="form.date"
+                    type="date"
+                    placeholder="Appointment date"
+                    value-format="YYYY-MM-DD"
+                    :disabled-date="disabledDate"
+                    style="width: 100%"
+                  ></el-date-picker>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="Start time" prop="startTime">
+                  <el-time-select
+                    v-model="form.startTime"
+                    start="08:00"
+                    step="00:15"
+                    end="18:00"
+                    placeholder="Start time"
+                    style="width: 100%"
+                  ></el-time-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="24">
+                <el-form-item label="Duration" prop="duration">
+                  <el-radio-group v-model="form.duration">
+                    <el-radio-button :value="30">30 min</el-radio-button>
+                    <el-radio-button :value="45">45 min</el-radio-button>
+                    <el-radio-button :value="60">60 min</el-radio-button>
+                  </el-radio-group>
+                </el-form-item>
+              </el-col>
+            </el-row>
+
+            <div class="form-section-title">Contact &amp; Notes</div>
+            <el-form-item label="Contact email" prop="contactEmail">
+              <el-input
+                v-model="form.contactEmail"
+                placeholder="Required when channel is Async Message"
+                clearable
+              ></el-input>
+            </el-form-item>
+            <el-form-item label="Notes" prop="notes">
+              <el-input
+                v-model="form.notes"
+                type="textarea"
+                :rows="3"
+                maxlength="500"
+                show-word-limit
+                placeholder="Reason for visit / special requirements"
+              ></el-input>
+            </el-form-item>
+            <el-form-item label="Notify patient" prop="notify">
+              <el-switch v-model="form.notify"></el-switch>
+              <span class="text-placeholder ml8">发送短信提醒给患者</span>
+            </el-form-item>
+          </el-form>
+
+          <template #footer>
+            <div class="dialog-footer-bar">
+              <span class="footer-left">
+                {{ form.id ? 'Editing ' + form.appointmentNo : 'Creating a new appointment' }}
+              </span>
+              <el-button plain @click="open = false">Cancel</el-button>
+              <el-button :loading="draftLoading" @click="submit(true)">Save draft</el-button>
+              <el-button type="primary" :loading="submitLoading" @click="submit(false)">
+                {{ form.id ? 'Save' : 'Create' }}
+              </el-button>
+            </div>
+          </template>
+        </el-dialog>
+      </div>
+    </div>
+
+    <div id="tpl-boot-loading" style="padding: 40px; color: #999">Loading template…</div>
+
+    <script>
+      var DEFAULT_FORM = function () {
+        return {
+          id: null,
+          appointmentNo: '',
+          patientId: null,
+          clinicianId: null,
+          caseType: '',
+          channel: 'Video Call',
+          date: '',
+          startTime: '',
+          duration: 30,
+          contactEmail: '',
+          notes: '',
+          notify: true
+        }
+      }
+
+      window.__TPL_PAGE__ = {
+        name: 'DialogFormPage',
+        data: function () {
+          var self = this
+          return {
+            embed: Tpl.isEmbed(),
+            Tpl: Tpl,
+            open: false,
+            submitLoading: false,
+            draftLoading: false,
+            listLoading: false,
+            list: Tpl.mock.appointments(6),
+            patients: Tpl.mock.patients(20),
+            clinicians: Tpl.dict.clinicians,
+            caseTypes: Tpl.dict.caseTypes,
+            channels: Tpl.dict.channels,
+            form: DEFAULT_FORM(),
+            rules: {
+              patientId: [{ required: true, message: 'Patient is required', trigger: 'change' }],
+              clinicianId: [{ required: true, message: 'Clinician is required', trigger: 'change' }],
+              caseType: [{ required: true, message: 'Case type is required', trigger: 'change' }],
+              channel: [{ required: true, message: 'Channel is required', trigger: 'change' }],
+              date: [{ required: true, message: 'Date is required', trigger: 'change' }],
+              startTime: [{ required: true, message: 'Start time is required', trigger: 'change' }],
+              contactEmail: [
+                {
+                  validator: function (rule, value, callback) {
+                    if (self.form.channel === 'Async Message' && !value) {
+                      return callback(new Error('Contact email is required for async messages'))
+                    }
+                    if (value && !/^[\w.-]+@[\w-]+(\.[\w-]+)+$/.test(value)) {
+                      return callback(new Error('Please enter a valid email address'))
+                    }
+                    callback()
+                  },
+                  trigger: 'blur'
+                }
+              ],
+              notes: [{ max: 500, message: 'Max 500 characters', trigger: 'blur' }]
+            }
+          }
+        },
+        computed: {
+          dialogTitle: function () {
+            return this.form.id ? 'Edit Appointment' : 'New Appointment'
+          }
+        },
+        methods: {
+          format: function (value) {
+            return Tpl.formatTime(value, 'YYYY-MM-DD HH:mm')
+          },
+          disabledDate: function (date) {
+            // 不允许选过去的日期（今天开始可选）
+            return date.getTime() < new Date().setHours(0, 0, 0, 0)
+          },
+          openCreate: function () {
+            var self = this
+            this.form = DEFAULT_FORM()
+            this.open = true
+            this.$nextTick(function () {
+              if (self.$refs.formRef) self.$refs.formRef.clearValidate()
+            })
+          },
+          openEdit: function (row) {
+            var self = this
+            this.form = DEFAULT_FORM()
+            this.open = true
+            this.$nextTick(function () {
+              if (self.$refs.formRef) self.$refs.formRef.clearValidate()
+              self.form.id = row.id
+              self.form.appointmentNo = row.appointmentNo
+              self.form.patientId = row.patientId
+              self.form.clinicianId = row.clinicianId
+              self.form.caseType = row.caseType
+              self.form.channel = row.channel
+              self.form.date = Tpl.formatTime(row.startTime, 'YYYY-MM-DD')
+              self.form.startTime = Tpl.formatTime(row.startTime, 'HH:mm')
+              self.form.duration = row.duration
+            })
+          },
+          submit: function (isDraft) {
+            var self = this
+            if (isDraft) this.draftLoading = true
+            else this.submitLoading = true
+
+            var done = function () {
+              self.draftLoading = false
+              self.submitLoading = false
+            }
+
+            if (isDraft) {
+              // 草稿：跳过校验，仅保存已填内容
+              window.setTimeout(function () {
+                done()
+                self.open = false
+                self.$message({ message: 'Draft saved', type: 'success' })
+              }, 400)
+              return
+            }
+
+            this.$refs.formRef.validate(function (valid) {
+              if (!valid) {
+                done()
+                self.$message({ message: 'Please fix the validation errors', type: 'warning' })
+                return
+              }
+              window.setTimeout(function () {
+                done()
+                self.open = false
+                self.$message({
+                  message: self.form.id ? 'Appointment updated' : 'Appointment created',
+                  type: 'success'
+                })
+              }, 500)
+            })
+          },
+          removeRow: function (row) {
+            var self = this
+            this.$confirm('Delete appointment ' + row.appointmentNo + '?', 'Warning', {
+              type: 'warning'
+            })
+              .then(function () {
+                self.$message({ message: 'Deleted', type: 'success' })
+              })
+              .catch(function () {})
+          },
+          handleClosed: function () {
+            // 关闭后重置，避免下次打开残留上次校验状态
+            this.form = DEFAULT_FORM()
+            if (this.$refs.formRef) this.$refs.formRef.clearValidate()
+          }
+        }
+      }
+    </script>
+    <script src="assets/template.js"></script>
+  </body>
+</html>
